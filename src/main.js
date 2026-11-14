@@ -4,6 +4,7 @@ import './style.css';
 const KEY = 'daymark-entries-v1';
 const PICKS_KEY = 'daymark-photo-picks-v1';
 const FONT_KEY = 'daymark-font-v1';
+const THEME_KEY = 'daymark-theme-v1';
 const DRAFT_KEY = 'daymark-draft-v1';
 const moods = [
   { value: 'bright', label: 'Bright', icon: 'SUN' },
@@ -15,6 +16,7 @@ const periods = ['day', 'week', 'month', 'year'];
 const periodLabels = { day: 'Day', week: 'Week', month: 'Month', year: 'Year' };
 const markerColors = ['none', 'sun', 'sea', 'rose', 'moss'];
 const fontOptions = { manrope: 'Soft Sans', serif: 'Book Serif', mono: 'Typewriter', rounded: 'Rounded', pixel: 'Pixelated' };
+const themeOptions = { paper: 'Paper', midnight: 'Midnight', blush: 'Blush', sage: 'Sage', electric: 'Electric' };
 const prompts = ['What felt lighter than expected today?', 'What is one small thing you want to remember?', 'Where did you feel most like yourself?', 'What are you carrying that you can set down?', 'Describe one detail that made today yours.', 'What would you tell your morning self?', 'What deserves a little more space in your life?'];
 const templates = { morning: ['Morning pages', 'What is here as I begin today?\n\n'], gratitude: ['Three good things', '1. \n2. \n3. \n\nWhy they mattered: '], brain: ['Brain dump', 'Everything on my mind:\n\n'], win: ['A small win', 'Today I am proud that I ' ] };
 
@@ -28,6 +30,7 @@ let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
 let pendingPhoto = '';
 let selectedPickPeriod = 'day';
 let fontChoice = 'manrope';
+let themeChoice = 'paper';
 let draftState = null;
 let deletedEntry = null;
 let undoTimer = null;
@@ -41,21 +44,28 @@ async function loadData() {
   const stored = await Preferences.get({ key: KEY });
   const picks = await Preferences.get({ key: PICKS_KEY });
   const font = await Preferences.get({ key: FONT_KEY });
+  const theme = await Preferences.get({ key: THEME_KEY });
   const draft = await Preferences.get({ key: DRAFT_KEY });
   entries = stored.value ? JSON.parse(stored.value) : [];
   photoPicks = picks.value ? { ...photoPicks, ...JSON.parse(picks.value) } : photoPicks;
   fontChoice = fontOptions[font.value] ? font.value : 'manrope';
+  themeChoice = themeOptions[theme.value] ? theme.value : 'paper';
   draftState = draft.value ? JSON.parse(draft.value) : null;
   applyFont();
+  applyTheme();
 }
 async function saveEntries() { await Preferences.set({ key: KEY, value: JSON.stringify(entries) }); }
 async function savePicks() { await Preferences.set({ key: PICKS_KEY, value: JSON.stringify(photoPicks) }); }
 async function saveFont() { await Preferences.set({ key: FONT_KEY, value: fontChoice }); }
+async function saveTheme() { await Preferences.set({ key: THEME_KEY, value: themeChoice }); }
 function applyFont() { document.documentElement.dataset.font = fontChoice; }
+function applyTheme() { document.documentElement.dataset.theme = themeChoice; }
 function selectedMood(value) { return moods.find((mood) => mood.value === value) || moods[1]; }
 function filterName(value) { if (value === 'pinned') return 'Pinned pages'; if (value === 'photos') return 'Pages with photos'; return value === 'all' ? 'All moods' : `${selectedMood(value).icon} ${selectedMood(value).label}`; }
 function dailyPrompt() { return prompts[Math.floor(new Date(`${dateKey()}T12:00:00`).getTime() / 86400000) % prompts.length]; }
 function entryStats(entry) { const words = entry.body.trim().split(/\s+/).filter(Boolean).length; return { words, minutes: Math.max(1, Math.ceil(words / 180)) }; }
+function renderBody(value) { return escapeHtml(value).replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>').replace(/__(.+?)__/gs, '<em>$1</em>').replace(/==(.+?)==/gs, '<mark>$1</mark>').replace(/!!(.+?)!!/gs, '<span class="fluorescent">$1</span>').replace(/\[(sun|sea|rose|moss)\](.+?)\[\/\1\]/gs, '<span class="text-$1">$2</span>').replace(/^- \[ \] (.+)$/gm, '<span class="check-row">□ $1</span>').replace(/\n/g, '<br>'); }
+function plainBody(value) { return value.replace(/\*\*|__|==|!!|\[\/(?:sun|sea|rose|moss)\]|\[(?:sun|sea|rose|moss)\]/g, ''); }
 function streakCount() { const dates = new Set(entries.map((entry) => entry.date)); let cursor = new Date(`${dateKey()}T12:00:00`); let streak = 0; while (dates.has(dateKey(cursor))) { streak += 1; cursor.setDate(cursor.getDate() - 1); } return streak; }
 function weekCount() { const now = new Date(); const start = new Date(now); start.setDate(now.getDate() - ((now.getDay() + 6) % 7)); const startKey = dateKey(start); return entries.filter((entry) => entry.date >= startKey).length; }
 function filteredEntries() { const normalized = query.trim().toLowerCase(); return [...entries].filter((entry) => activeFilter === 'all' || (activeFilter === 'pinned' ? entry.pinned : activeFilter === 'photos' ? entry.photo : entry.mood === activeFilter)).filter((entry) => !normalized || `${entry.title} ${entry.body} ${(entry.tags || []).join(' ')}`.toLowerCase().includes(normalized)).sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.date.localeCompare(a.date)); }
@@ -76,7 +86,7 @@ function entryCard(entry) {
   const reminder = entry.reminder?.date ? `<span class="plan-tag">Plan ${escapeHtml(entry.reminder.date)} ${escapeHtml(entry.reminder.time || '')}</span>` : '';
   const photo = entry.photo ? `<img class="entry-photo" src="${escapeHtml(entry.photo)}" alt="Photo from ${escapeHtml(entry.date)}" />` : '';
   const stats = entryStats(entry);
-  return `<article class="entry-card marker-${entry.marker || 'none'}" data-id="${entry.id}">${entry.pinned ? '<span class="pin-badge">PINNED</span>' : ''}${photo}<div class="entry-meta"><span>${prettyDate(entry.date)}</span><span class="mood-tag mood-${mood.value}">${mood.icon} ${mood.label}</span></div><h3>${escapeHtml(entry.title || 'Untitled moment')}</h3><p>${escapeHtml(entry.body)}</p><div class="entry-stats">${stats.words} words <span>/</span> ${stats.minutes} min read</div>${entry.tags?.length ? `<div class="tags">${entry.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join('')}</div>` : ''}${reminder}<button class="share-entry" data-share-id="${entry.id}" aria-label="Share entry">SHARE</button><button class="card-arrow" aria-label="Edit entry">OPEN</button></article>`;
+  return `<article class="entry-card marker-${entry.marker || 'none'}" data-id="${entry.id}">${entry.pinned ? '<span class="pin-badge">PINNED</span>' : ''}${photo}<div class="entry-meta"><span>${prettyDate(entry.date)}</span><span class="mood-tag mood-${mood.value}">${mood.icon} ${mood.label}</span></div><h3>${escapeHtml(entry.title || 'Untitled moment')}</h3><p>${renderBody(entry.body)}</p><div class="entry-stats">${stats.words} words <span>/</span> ${stats.minutes} min read</div>${entry.tags?.length ? `<div class="tags">${entry.tags.map((tag) => `<span>#${escapeHtml(tag)}</span>`).join('')}</div>` : ''}${reminder}<button class="share-entry" data-share-id="${entry.id}" aria-label="Share entry">SHARE</button><button class="card-arrow" aria-label="Edit entry">OPEN</button></article>`;
 }
 
 function calendarView() {
@@ -93,6 +103,10 @@ function openEditor(entry = null, initialDate = dateKey()) {
   const templatesHtml = Object.entries(templates).map(([key, [label]]) => `<button type="button" class="template-button" data-template="${key}">${label}</button>`).join('');
   const recoverHtml = !entry && draftState?.body ? '<button type="button" class="restore-draft" id="restore-draft">Restore unfinished draft</button>' : '';
   sheet.innerHTML = `<div class="sheet-panel"><div class="sheet-top"><button class="close-button" id="close-sheet">X</button><span class="eyebrow">${entry ? 'EDIT REFLECTION' : 'NEW REFLECTION'}</span><button class="save-button" id="save-entry">Save</button></div><div class="editor-date"><span>${prettyDate(draft.date)}</span><input id="entry-date" type="date" value="${escapeHtml(draft.date)}" /></div><input class="title-input" id="entry-title" placeholder="Give this moment a name" value="${escapeHtml(draft.title)}" />${recoverHtml}<div class="template-options"><span class="eyebrow">START WITH A TEMPLATE</span><div>${templatesHtml}</div></div><textarea id="entry-body" placeholder="What is on your mind?\n\nThere is no right way to write here.">${escapeHtml(draft.body)}</textarea><div class="mood-picker"><span class="eyebrow">HOW DOES IT FEEL?</span><div class="mood-options">${moods.map((mood) => `<button class="mood-option ${draft.mood === mood.value ? 'selected' : ''}" data-mood="${mood.value}"><span>${mood.icon}</span>${mood.label}</button>`).join('')}</div></div><div class="page-markers"><label class="pin-toggle"><input id="entry-pinned" type="checkbox" ${draft.pinned ? 'checked' : ''} /> <span>Pin this page</span></label><span class="eyebrow">PAGE MARKER</span><div class="marker-options">${markerColors.map((marker) => `<button type="button" class="marker-option marker-${marker} ${draft.marker === marker ? 'selected' : ''}" data-marker="${marker}" aria-label="${marker} marker"></button>`).join('')}</div></div><div class="photo-picker"><div><span class="eyebrow">A PAGE WITH A PICTURE</span><p>Add a photo to remember this day.</p></div><input id="entry-photo" type="file" accept="image/*" /><div id="photo-preview">${pendingPhoto ? `<img src="${escapeHtml(pendingPhoto)}" alt="Selected photo" /><button id="remove-photo" type="button">Remove</button>` : ''}</div></div><div class="planning"><span class="eyebrow">PLAN A REMINDER</span><div class="plan-fields"><input id="reminder-date" type="date" value="${escapeHtml(draft.reminder?.date || '')}" /><input id="reminder-time" type="time" value="${escapeHtml(draft.reminder?.time || '')}" /></div><p>We will remind you on this device.</p></div><input class="tags-input" id="entry-tags" placeholder="Add tags, separated by commas" value="${escapeHtml((draft.tags || []).join(', '))}" />${entry ? '<button class="delete-entry" id="delete-entry">Delete this entry</button>' : ''}</div>`;
+  document.querySelector('#entry-body').insertAdjacentHTML('beforebegin', '<div class="composer-toolbar"><button type="button" data-format="bold">B</button><button type="button" data-format="italic"><i>I</i></button><button type="button" data-format="highlight">HIGHLIGHT</button><button type="button" data-format="fluorescent">NEON</button><button type="button" data-format="checklist">CHECKLIST</button><span class="text-swatches"><button type="button" data-format="sun" aria-label="Gold text"></button><button type="button" data-format="sea" aria-label="Blue text"></button><button type="button" data-format="rose" aria-label="Rose text"></button><button type="button" data-format="moss" aria-label="Green text"></button></span></div>');
+  if (entry) document.querySelector('.sheet-top').insertAdjacentHTML('beforeend', '<button class="share-editor" id="share-editor">Share</button>');
+  document.querySelectorAll('.composer-toolbar [data-format]').forEach((button) => button.addEventListener('click', () => applyComposerFormat(button.dataset.format)));
+  document.querySelector('#share-editor')?.addEventListener('click', () => shareEntry({ ...draft, body: plainBody(document.querySelector('#entry-body').value) }));
   document.querySelector('#entry-body').focus();
   document.querySelectorAll('.mood-option').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.mood-option').forEach((item) => item.classList.remove('selected')); button.classList.add('selected'); }));
   document.querySelectorAll('.marker-option').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.marker-option').forEach((item) => item.classList.remove('selected')); button.classList.add('selected'); }));
@@ -104,6 +118,7 @@ function openEditor(entry = null, initialDate = dateKey()) {
   document.querySelector('#close-sheet').addEventListener('click', closeEditor); document.querySelector('#save-entry').addEventListener('click', saveEditor); document.querySelector('#delete-entry')?.addEventListener('click', deleteEditor);
 }
 
+function applyComposerFormat(format) { const textarea = document.querySelector('#entry-body'); const start = textarea.selectionStart; const end = textarea.selectionEnd; const selected = textarea.value.slice(start, end) || 'your words'; const wrappers = { bold: ['**', '**'], italic: ['__', '__'], highlight: ['==', '=='], fluorescent: ['!!', '!!'], checklist: ['- [ ] ', ''] }; const color = ['sun', 'sea', 'rose', 'moss'].includes(format) ? [ `[${format}]`, `[/${format}]` ] : wrappers[format]; if (!color) return; textarea.setRangeText(`${color[0]}${selected}${color[1]}`, start, end, 'select'); textarea.focus(); saveDraft(); }
 function renderPhotoPreview() { const preview = document.querySelector('#photo-preview'); if (preview) preview.innerHTML = pendingPhoto ? `<img src="${escapeHtml(pendingPhoto)}" alt="Selected photo" /><button id="remove-photo" type="button">Remove</button>` : ''; document.querySelector('#remove-photo')?.addEventListener('click', () => { pendingPhoto = ''; renderPhotoPreview(); }); }
 function compressPhoto(file) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => { const image = new Image(); image.onload = () => { const scale = Math.min(1, 1200 / Math.max(image.width, image.height)); const canvas = document.createElement('canvas'); canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale); canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height); resolve(canvas.toDataURL('image/jpeg', 0.78)); }; image.onerror = reject; image.src = reader.result; }; reader.onerror = reject; reader.readAsDataURL(file); }); }
 async function saveDraft() { const body = document.querySelector('#entry-body')?.value || ''; const title = document.querySelector('#entry-title')?.value || ''; if (!body && !title) return; draftState = { title, body, date: document.querySelector('#entry-date')?.value || dateKey() }; await Preferences.set({ key: DRAFT_KEY, value: JSON.stringify(draftState) }); }
@@ -130,15 +145,17 @@ function showFilter() { const sheet = document.querySelector('#sheet'); sheet.cl
 function showSettings() {
   const sheet = document.querySelector('#sheet'); sheet.className = 'sheet';
   sheet.innerHTML = `<div class="sheet-panel compact"><div class="sheet-top"><button class="close-button" id="close-sheet">X</button><span class="eyebrow">DAYMARK TOOLKIT</span><span></span></div><div class="settings-intro"><h2>Keep your pages yours.</h2><p>Back up your notebook as one portable file, or bring it to another device.</p></div><div class="font-settings"><span class="eyebrow">NOTEBOOK TYPE</span><p>Choose how your pages feel to read.</p><div class="font-options">${Object.entries(fontOptions).map(([value, label]) => `<button class="font-option font-${value} ${fontChoice === value ? 'selected' : ''}" data-font="${value}">${label}<span>A page of your story</span></button>`).join('')}</div></div><div class="backup-card"><div><span class="eyebrow">PRIVATE BACKUP</span><h3>${entries.length} pages, ${entries.filter((entry) => entry.photo).length} photos</h3><p>The <strong>.mynotebook</strong> file includes entries, pictures, markers, reminders, and photo collections.</p></div><button class="primary-wide" id="export-notebook">Export notebook</button><label class="secondary-wide">Choose backup file<input id="import-notebook" type="file" accept="*/*" /></label><p class="backup-help">Select any downloaded file. Daymark checks the contents and only accepts valid <strong>.mynotebook</strong> backups.</p></div><div class="settings-list"><button id="settings-tips">How Daymark works <span>+</span></button><button id="settings-clear-search">Clear search and filters <span>+</span></button></div><p class="insight-note">Your notebook stays on this device unless you choose to export or share it.</p></div>`;
+  document.querySelector('.font-settings').insertAdjacentHTML('beforebegin', `<div class="theme-settings"><span class="eyebrow">PREMIUM PALETTE</span><p>Set the atmosphere for your notebook.</p><div class="theme-options">${Object.entries(themeOptions).map(([value, label]) => `<button class="theme-option theme-${value} ${themeChoice === value ? 'selected' : ''}" data-theme-choice="${value}">${label}</button>`).join('')}</div></div>`);
   document.querySelector('#close-sheet').addEventListener('click', closeEditor);
   document.querySelector('#export-notebook').addEventListener('click', exportNotebook);
   document.querySelector('#import-notebook').addEventListener('change', (event) => importNotebook(event.target.files[0]));
   document.querySelectorAll('.font-option').forEach((button) => button.addEventListener('click', async () => { fontChoice = button.dataset.font; await saveFont(); applyFont(); showSettings(); }));
+  document.querySelectorAll('.theme-option').forEach((button) => button.addEventListener('click', async () => { themeChoice = button.dataset.themeChoice; await saveTheme(); applyTheme(); showSettings(); }));
   document.querySelector('#settings-tips').addEventListener('click', () => alert('Pin important pages, choose a colored marker, attach a photo, and set a reminder while writing.'));
   document.querySelector('#settings-clear-search').addEventListener('click', () => { query = ''; activeFilter = 'all'; closeEditor(); render(); });
 }
 
-function notebookData() { return { format: 'mynotebook', version: 1, app: 'Daymark', exportedAt: new Date().toISOString(), entries, photoPicks, fontChoice }; }
+function notebookData() { return { format: 'mynotebook', version: 1, app: 'Daymark', exportedAt: new Date().toISOString(), entries, photoPicks, fontChoice, themeChoice }; }
 function blobDataUrl(blob) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; reader.readAsDataURL(blob); }); }
 async function exportNotebook() {
   const filename = `daymark-${dateKey()}.mynotebook`; const blob = new Blob([JSON.stringify(notebookData(), null, 2)], { type: 'application/x-mynotebook+json' });
@@ -151,7 +168,7 @@ async function exportNotebook() {
 
 function normalizeImportedEntry(entry) { if (!entry || typeof entry !== 'object' || typeof entry.body !== 'string' || typeof entry.date !== 'string') return null; return { id: typeof entry.id === 'string' ? entry.id : uid(), date: /^\d{4}-\d{2}-\d{2}$/.test(entry.date) ? entry.date : dateKey(), title: typeof entry.title === 'string' ? entry.title : '', body: entry.body, mood: moods.some((mood) => mood.value === entry.mood) ? entry.mood : 'steady', tags: Array.isArray(entry.tags) ? entry.tags.filter((tag) => typeof tag === 'string').slice(0, 8) : [], photo: typeof entry.photo === 'string' && entry.photo.startsWith('data:image/') ? entry.photo : '', pinned: Boolean(entry.pinned), marker: markerColors.includes(entry.marker) ? entry.marker : 'none', reminder: entry.reminder?.date ? { date: entry.reminder.date, time: entry.reminder.time || '09:00' } : null, updatedAt: Number(entry.updatedAt) || Date.now() }; }
 async function importNotebook(file) {
-  if (!file) return; try { const data = JSON.parse(await file.text()); if (data.format !== 'mynotebook' || !Array.isArray(data.entries)) throw new Error('This is not a Daymark notebook file.'); const imported = data.entries.map(normalizeImportedEntry).filter(Boolean); const replace = window.confirm(`Import ${imported.length} pages and replace the current notebook? Choose Cancel to merge instead.`); if (replace) entries = imported; else { const existing = new Set(entries.map((entry) => entry.id)); entries = [...entries, ...imported.filter((entry) => !existing.has(entry.id))]; } photoPicks = { ...photoPicks, ...(data.photoPicks || {}) }; if (fontOptions[data.fontChoice]) { fontChoice = data.fontChoice; await saveFont(); applyFont(); } await saveEntries(); await savePicks(); closeEditor(); render(); alert(`Imported ${imported.length} pages successfully.`); } catch (error) { alert(`Could not import notebook: ${error.message}`); } }
+  if (!file) return; try { const data = JSON.parse(await file.text()); if (data.format !== 'mynotebook' || !Array.isArray(data.entries)) throw new Error('This is not a Daymark notebook file.'); const imported = data.entries.map(normalizeImportedEntry).filter(Boolean); const replace = window.confirm(`Import ${imported.length} pages and replace the current notebook? Choose Cancel to merge instead.`); if (replace) entries = imported; else { const existing = new Set(entries.map((entry) => entry.id)); entries = [...entries, ...imported.filter((entry) => !existing.has(entry.id))]; } photoPicks = { ...photoPicks, ...(data.photoPicks || {}) }; if (fontOptions[data.fontChoice]) { fontChoice = data.fontChoice; await saveFont(); applyFont(); } if (themeOptions[data.themeChoice]) { themeChoice = data.themeChoice; await saveTheme(); applyTheme(); } await saveEntries(); await savePicks(); closeEditor(); render(); alert(`Imported ${imported.length} pages successfully.`); } catch (error) { alert(`Could not import notebook: ${error.message}`); } }
 
 async function shareEntry(entry) { const text = `${entry.title || 'A Daymark page'}\n\n${entry.body}\n\n${prettyDate(entry.date)} - written in Daymark`; if (navigator.share) { try { await navigator.share({ title: entry.title || 'Daymark page', text }); return; } catch (error) { if (error.name === 'AbortError') return; } } await navigator.clipboard?.writeText(text); alert('Page copied to your clipboard.'); }
 
