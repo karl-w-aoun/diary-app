@@ -1,0 +1,8 @@
+{
+  "appId": "com.karlwaoun.daymark",
+  "appName": "Daymark Diary",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}
